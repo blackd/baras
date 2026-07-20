@@ -545,8 +545,11 @@ impl SignalHandler for CombatSignalHandler {
                     let _ = self.overlay_tx.try_send(OverlayUpdate::ConversationEnded);
                 }
             }
-            GameSignal::AreaEntered { area_id, .. } => {
+            GameSignal::AreaEntered { area_id, area_name, .. } => {
                 // Note: Boss definitions are loaded synchronously in process_event via definition_loader
+                // Log every area transition — useful for discovering the area id/name
+                // when authoring encounter definitions or map files.
+                tracing::debug!(area_id = *area_id, area_name = %area_name, "AreaEntered signal");
                 let current = self.shared.current_area_id.load(Ordering::SeqCst);
                 if *area_id != current {
                     self.shared
@@ -2951,6 +2954,11 @@ async fn calculate_combat_data(shared: &Arc<SharedState>) -> Option<CombatData> 
             .map(|(start, now)| (now - start).num_milliseconds() as f32 / 1000.0)
             .unwrap_or(0.0);
 
+        // Raw filesystem slugs for the map overlay (boss definition id + raw phase
+        // id, NOT the display names resolved above).
+        let encounter_slug = encounter.active_boss_definition().map(|def| def.id.clone());
+        let phase_slug = encounter.current_phase.clone();
+
         Some(CombatData {
             metrics,
             player_entity_id,
@@ -2962,6 +2970,8 @@ async fn calculate_combat_data(shared: &Arc<SharedState>) -> Option<CombatData> 
             challenges,
             current_phase,
             phase_time_secs,
+            encounter_slug,
+            phase_slug,
         })
     } else if let Some(summary) = cache.encounter_history.summaries().last() {
         // Fallback to historical summary for initial hydration when no live encounter exists
@@ -3060,6 +3070,8 @@ async fn calculate_combat_data(shared: &Arc<SharedState>) -> Option<CombatData> 
             challenges,
             current_phase: None,
             phase_time_secs: 0.0,
+            encounter_slug: None,
+            phase_slug: None,
         })
     } else {
         None
@@ -4069,6 +4081,12 @@ pub struct CombatData {
     pub current_phase: Option<String>,
     /// Time spent in the current phase (seconds)
     pub phase_time_secs: f32,
+    /// Filesystem-friendly slug of the active boss definition (e.g. "apex_vanguard"),
+    /// used to locate the map overlay SVG. `None` when no boss is active.
+    pub encounter_slug: Option<String>,
+    /// Filesystem-friendly slug of the current phase (the raw phase id, e.g. "walker_1"),
+    /// used to locate the map overlay SVG. `None` when no phase is active.
+    pub phase_slug: Option<String>,
 }
 
 impl CombatData {
